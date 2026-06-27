@@ -930,7 +930,8 @@
         async function fetchRetry(url) {
             if(cacheData.has(url)) return cacheData.get(url);
             
-            const timeout = 6000; // 6 segundos de tiempo límite para no quedarse colgado
+            // MODIFICACIÓN CRÍTICA: Aumentamos a 25 segundos para permitir cargar listas enormes sin crashear.
+            const timeout = 25000; 
             
             const fetchTimeout = async (fetchUrl) => {
                 const controller = new AbortController();
@@ -1049,14 +1050,20 @@
         async function preloadGlobalData() {
             const types = [ { key: 'live', action: 'get_live_streams' }, { key: 'movie', action: 'get_vod_streams' }, { key: 'series', action: 'get_series' } ];
             for(let t of types) {
-                const data = await fetchRetry(`${host}/player_api.php?username=${u}&password=${p}&action=${t.action}`);
-                if(data) {
-                    globalDatabase[t.key] = data;
-                    data.forEach(item => { const catId = item.category_id || "0"; categoryCounts[t.key][catId] = (categoryCounts[t.key][catId] || 0) + 1; });
-                    document.getElementById(`count-${t.key}`).innerHTML = `<span class="cat-count">${data.length}</span>`;
+                try {
+                    const data = await fetchRetry(`${host}/player_api.php?username=${u}&password=${p}&action=${t.action}`);
+                    // MODIFICACIÓN CRÍTICA: Validar estrictamente si es Array para evitar bloqueos del "forEach"
+                    if(data && Array.isArray(data)) {
+                        globalDatabase[t.key] = data;
+                        data.forEach(item => { const catId = item.category_id || "0"; categoryCounts[t.key][catId] = (categoryCounts[t.key][catId] || 0) + 1; });
+                        document.getElementById(`count-${t.key}`).innerHTML = `<span class="cat-count">${data.length}</span>`;
+                    }
+                } catch(e) {
+                    console.error("Error obteniendo listado: ", e);
                 }
             }
-            sliderMovies = globalDatabase.movie.slice(0, 15);
+            // Modificación adicional: Protección ante arrays vacíos para el slider automático
+            sliderMovies = (globalDatabase.movie || []).slice(0, 15);
         }
 
         function initAutoSlider() {
@@ -1143,8 +1150,9 @@
         async function showHome() { 
             if (memoryViews.home.hasChildNodes()) { switchView('home'); return; }
             toggleLoader(true);
-            createRow("Películas Recientes", globalDatabase.movie.slice(0, 40), "movie", "home_movies", memoryViews.home);
-            createRow("Series Recientes", globalDatabase.series.slice(0, 40), "series", "home_series", memoryViews.home);
+            // Validaciones con "|| []" adicionales por seguridad.
+            createRow("Películas Recientes", (globalDatabase.movie || []).slice(0, 40), "movie", "home_movies", memoryViews.home);
+            createRow("Series Recientes", (globalDatabase.series || []).slice(0, 40), "series", "home_series", memoryViews.home);
             switchView('home');
             toggleLoader(false);
         }
@@ -1155,9 +1163,9 @@
             if(globalDatabase[mode]?.length > 0) createRow(`TODO EL CONTENIDO <span class="cat-count">${globalDatabase[mode].length}</span>`, globalDatabase[mode], mode, `all_${mode}`, memoryViews[mode]);
             const actions = { live: 'get_live_categories', movie: 'get_vod_categories', series: 'get_series_categories' };
             const categories = await fetchRetry(`${host}/player_api.php?username=${u}&password=${p}&action=${actions[mode]}`);
-            if(categories) {
+            if(categories && Array.isArray(categories)) {
                 categories.forEach(cat => {
-                    const filtered = globalDatabase[mode].filter(item => item.category_id === cat.category_id);
+                    const filtered = (globalDatabase[mode] || []).filter(item => item.category_id === cat.category_id);
                     if(filtered.length > 0) createRow(`${cat.category_name} <span class="cat-count">${filtered.length}</span>`, filtered, mode, `cat_${cat.category_id}`, memoryViews[mode]);
                 });
             }
@@ -1317,9 +1325,9 @@
             const categories = await fetchRetry(`${host}/player_api.php?username=${u}&password=${p}&action=${actions[currentMode]}`);
             const list = document.getElementById('categories-list');
             list.innerHTML = "";
-            if(categories) {
+            if(categories && Array.isArray(categories)) {
                 categories.forEach(cat => {
-                    const count = globalDatabase[currentMode].filter(i => i.category_id === cat.category_id).length;
+                    const count = (globalDatabase[currentMode] || []).filter(i => i.category_id === cat.category_id).length;
                     if(count > 0) {
                         const item = document.createElement('div');
                         item.className = "cat-item-row nav-item";
