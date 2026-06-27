@@ -930,16 +930,16 @@
         async function fetchRetry(url) {
             if(cacheData.has(url)) return cacheData.get(url);
             
-            // MODIFICACIÓN CRÍTICA: Aumentamos a 25 segundos para permitir cargar listas enormes sin crashear.
-            const timeout = 25000; 
+            // Tiempo límite extendido a 8 segundos para evitar cortes con listas grandes
+            const timeout = 8000; 
             
-            const fetchTimeout = async (fetchUrl) => {
+            const fetchWithTimeout = async (fetchUrl) => {
                 const controller = new AbortController();
                 const id = setTimeout(() => controller.abort(), timeout);
                 try {
                     const response = await fetch(fetchUrl, { signal: controller.signal });
                     clearTimeout(id);
-                    if (!response.ok) throw new Error("Network response was not ok");
+                    if (!response.ok) throw new Error("Error HTTP: " + response.status);
                     return await response.json();
                 } catch (error) {
                     clearTimeout(id);
@@ -947,31 +947,30 @@
                 }
             };
 
-            try { 
-                // Antibloqueo 1: AllOrigins suele ser más rápido y estable
-                const proxy1 = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
-                const data = await fetchTimeout(proxy1); 
-                cacheData.set(url, data); 
-                return data; 
-            } catch(e) { 
-                // Antibloqueo 2: Respaldo corsproxy
+            // Sistema de cascada con 4 puentes proxies super potentes para saltar CORS y Mixed Content
+            const proxies = [
+                'https://api.codetabs.com/v1/proxy?quest=' + url,
+                'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+                'https://corsproxy.io/?' + encodeURIComponent(url),
+                'https://thingproxy.freeboard.io/fetch/' + url
+            ];
+
+            for (let proxy of proxies) {
                 try {
-                    const proxy2 = 'https://corsproxy.io/?' + encodeURIComponent(url);
-                    const data2 = await fetchTimeout(proxy2);
-                    cacheData.set(url, data2);
-                    return data2;
-                } catch (e2) {
-                    // Antibloqueo 3: Respaldo final thingproxy
-                    try {
-                        const proxy3 = 'https://thingproxy.freeboard.io/fetch/' + url;
-                        const data3 = await fetchTimeout(proxy3);
-                        cacheData.set(url, data3);
-                        return data3;
-                    } catch (e3) {
-                        return null;
+                    const data = await fetchWithTimeout(proxy);
+                    if (data) {
+                        cacheData.set(url, data);
+                        return data;
                     }
+                } catch (e) {
+                    console.warn(`Fallo en el puente proxy (${proxy.split('/')[2]}):`, e.message);
+                    // Si falla, el loop continúa intentando con el siguiente puente automáticamente
                 }
             }
+            
+            // Si todos los puentes fallan, devuelve null para no colgar la interfaz
+            console.error("Bloqueo detectado: Todos los puentes CORS fallaron para:", url);
+            return null;
         }
 
         function logout() { localStorage.clear(); location.reload(); }
@@ -1029,7 +1028,7 @@
             toggleLoader(false);
             
             if (!success) {
-                alert("Error de conexión: Por favor, verifica tu usuario/contraseña o intenta más tarde. (Posible bloqueo de red o proxies lentos)");
+                alert("Error de conexión: Por favor, verifica tu usuario/contraseña o intenta más tarde. (Posible bloqueo de red o proxies saturados)");
             }
         }
 
@@ -1050,20 +1049,14 @@
         async function preloadGlobalData() {
             const types = [ { key: 'live', action: 'get_live_streams' }, { key: 'movie', action: 'get_vod_streams' }, { key: 'series', action: 'get_series' } ];
             for(let t of types) {
-                try {
-                    const data = await fetchRetry(`${host}/player_api.php?username=${u}&password=${p}&action=${t.action}`);
-                    // MODIFICACIÓN CRÍTICA: Validar estrictamente si es Array para evitar bloqueos del "forEach"
-                    if(data && Array.isArray(data)) {
-                        globalDatabase[t.key] = data;
-                        data.forEach(item => { const catId = item.category_id || "0"; categoryCounts[t.key][catId] = (categoryCounts[t.key][catId] || 0) + 1; });
-                        document.getElementById(`count-${t.key}`).innerHTML = `<span class="cat-count">${data.length}</span>`;
-                    }
-                } catch(e) {
-                    console.error("Error obteniendo listado: ", e);
+                const data = await fetchRetry(`${host}/player_api.php?username=${u}&password=${p}&action=${t.action}`);
+                if(data) {
+                    globalDatabase[t.key] = data;
+                    data.forEach(item => { const catId = item.category_id || "0"; categoryCounts[t.key][catId] = (categoryCounts[t.key][catId] || 0) + 1; });
+                    document.getElementById(`count-${t.key}`).innerHTML = `<span class="cat-count">${data.length}</span>`;
                 }
             }
-            // Modificación adicional: Protección ante arrays vacíos para el slider automático
-            sliderMovies = (globalDatabase.movie || []).slice(0, 15);
+            sliderMovies = globalDatabase.movie.slice(0, 15);
         }
 
         function initAutoSlider() {
@@ -1150,9 +1143,8 @@
         async function showHome() { 
             if (memoryViews.home.hasChildNodes()) { switchView('home'); return; }
             toggleLoader(true);
-            // Validaciones con "|| []" adicionales por seguridad.
-            createRow("Películas Recientes", (globalDatabase.movie || []).slice(0, 40), "movie", "home_movies", memoryViews.home);
-            createRow("Series Recientes", (globalDatabase.series || []).slice(0, 40), "series", "home_series", memoryViews.home);
+            createRow("Películas Recientes", globalDatabase.movie.slice(0, 40), "movie", "home_movies", memoryViews.home);
+            createRow("Series Recientes", globalDatabase.series.slice(0, 40), "series", "home_series", memoryViews.home);
             switchView('home');
             toggleLoader(false);
         }
@@ -1163,9 +1155,9 @@
             if(globalDatabase[mode]?.length > 0) createRow(`TODO EL CONTENIDO <span class="cat-count">${globalDatabase[mode].length}</span>`, globalDatabase[mode], mode, `all_${mode}`, memoryViews[mode]);
             const actions = { live: 'get_live_categories', movie: 'get_vod_categories', series: 'get_series_categories' };
             const categories = await fetchRetry(`${host}/player_api.php?username=${u}&password=${p}&action=${actions[mode]}`);
-            if(categories && Array.isArray(categories)) {
+            if(categories) {
                 categories.forEach(cat => {
-                    const filtered = (globalDatabase[mode] || []).filter(item => item.category_id === cat.category_id);
+                    const filtered = globalDatabase[mode].filter(item => item.category_id === cat.category_id);
                     if(filtered.length > 0) createRow(`${cat.category_name} <span class="cat-count">${filtered.length}</span>`, filtered, mode, `cat_${cat.category_id}`, memoryViews[mode]);
                 });
             }
@@ -1325,9 +1317,9 @@
             const categories = await fetchRetry(`${host}/player_api.php?username=${u}&password=${p}&action=${actions[currentMode]}`);
             const list = document.getElementById('categories-list');
             list.innerHTML = "";
-            if(categories && Array.isArray(categories)) {
+            if(categories) {
                 categories.forEach(cat => {
-                    const count = (globalDatabase[currentMode] || []).filter(i => i.category_id === cat.category_id).length;
+                    const count = globalDatabase[currentMode].filter(i => i.category_id === cat.category_id).length;
                     if(count > 0) {
                         const item = document.createElement('div');
                         item.className = "cat-item-row nav-item";
