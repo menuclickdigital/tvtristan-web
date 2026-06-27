@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TVTRISTAN WEB</title>
+    <meta name="referrer" content="no-referrer">
+    <title>TVTRISTAN | Experience</title>
     
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
@@ -925,9 +926,29 @@
             container.prepend(fallback);
         }
 
+        /* --- AQUI ESTA EL ANTIBLOQUEO IMPLEMENTADO --- */
         async function fetchRetry(url) {
             if(cacheData.has(url)) return cacheData.get(url);
-            try { const resp = await fetch(url); const data = await resp.json(); cacheData.set(url, data); return data; } catch(e) { return null; }
+            
+            try { 
+                // Antibloqueo 1: Evita el Mixed Content envolviendo la petición en un proxy HTTPS
+                const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(url);
+                const resp = await fetch(proxyUrl); 
+                const data = await resp.json(); 
+                cacheData.set(url, data); 
+                return data; 
+            } catch(e) { 
+                // Antibloqueo 2: Respaldo por si el primer proxy falla
+                try {
+                    const fallbackUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+                    const resp2 = await fetch(fallbackUrl);
+                    const data2 = await resp2.json();
+                    cacheData.set(url, data2);
+                    return data2;
+                } catch (e2) {
+                    return null; 
+                }
+            }
         }
 
         function logout() { localStorage.clear(); location.reload(); }
