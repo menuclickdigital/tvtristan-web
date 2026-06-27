@@ -926,41 +926,68 @@
             container.prepend(fallback);
         }
 
-        /* --- AQUI ESTA EL ANTIBLOQUEO IMPLEMENTADO --- */
+        /* --- AQUI ESTA EL ANTIBLOQUEO IMPLEMENTADO Y CORREGIDO --- */
         async function fetchRetry(url) {
             if(cacheData.has(url)) return cacheData.get(url);
             
+            const timeout = 6000; // 6 segundos de tiempo límite para no quedarse colgado
+            
+            const fetchTimeout = async (fetchUrl) => {
+                const controller = new AbortController();
+                const id = setTimeout(() => controller.abort(), timeout);
+                try {
+                    const response = await fetch(fetchUrl, { signal: controller.signal });
+                    clearTimeout(id);
+                    if (!response.ok) throw new Error("Network response was not ok");
+                    return await response.json();
+                } catch (error) {
+                    clearTimeout(id);
+                    throw error;
+                }
+            };
+
             try { 
-                // Antibloqueo 1: Evita el Mixed Content envolviendo la petición en un proxy HTTPS
-                const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(url);
-                const resp = await fetch(proxyUrl); 
-                const data = await resp.json(); 
+                // Antibloqueo 1: AllOrigins suele ser más rápido y estable
+                const proxy1 = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+                const data = await fetchTimeout(proxy1); 
                 cacheData.set(url, data); 
                 return data; 
             } catch(e) { 
-                // Antibloqueo 2: Respaldo por si el primer proxy falla
+                // Antibloqueo 2: Respaldo corsproxy
                 try {
-                    const fallbackUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
-                    const resp2 = await fetch(fallbackUrl);
-                    const data2 = await resp2.json();
+                    const proxy2 = 'https://corsproxy.io/?' + encodeURIComponent(url);
+                    const data2 = await fetchTimeout(proxy2);
                     cacheData.set(url, data2);
                     return data2;
                 } catch (e2) {
-                    return null; 
+                    // Antibloqueo 3: Respaldo final thingproxy
+                    try {
+                        const proxy3 = 'https://thingproxy.freeboard.io/fetch/' + url;
+                        const data3 = await fetchTimeout(proxy3);
+                        cacheData.set(url, data3);
+                        return data3;
+                    } catch (e3) {
+                        return null;
+                    }
                 }
             }
         }
 
         function logout() { localStorage.clear(); location.reload(); }
 
+        /* --- LOGICA DE LOGIN ACTUALIZADA PARA ALERTAR ERRORES --- */
         async function auth() {
             u = document.getElementById('user').value.trim();
             p = document.getElementById('pass').value.trim();
             if(!u || !p) return;
             toggleLoader(true);
+            
+            let success = false;
+            
             for(let base of dnsList) {
                 const data = await fetchRetry(`${base}/player_api.php?username=${u}&password=${p}`);
                 if(data?.user_info?.auth === 1) {
+                    success = true;
                     host = base;
                     localStorage.setItem('fire_u', u); localStorage.setItem('fire_p', p);
                     
@@ -997,7 +1024,12 @@
                     break; 
                 }
             }
+            
             toggleLoader(false);
+            
+            if (!success) {
+                alert("Error de conexión: Por favor, verifica tu usuario/contraseña o intenta más tarde. (Posible bloqueo de red o proxies lentos)");
+            }
         }
 
         function toggleSmartScroll() {
