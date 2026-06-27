@@ -2,7 +2,6 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
     <title>TVTRISTAN | Experience</title>
@@ -930,8 +929,8 @@
         async function fetchRetry(url) {
             if(cacheData.has(url)) return cacheData.get(url);
             
-            // Tiempo límite extendido a 8 segundos para evitar cortes con listas grandes
-            const timeout = 8000; 
+            // Tiempo límite extendido a 15 segundos para listas IPTV gigantes
+            const timeout = 15000; 
             
             const fetchWithTimeout = async (fetchUrl) => {
                 const controller = new AbortController();
@@ -1050,7 +1049,7 @@
             const types = [ { key: 'live', action: 'get_live_streams' }, { key: 'movie', action: 'get_vod_streams' }, { key: 'series', action: 'get_series' } ];
             for(let t of types) {
                 const data = await fetchRetry(`${host}/player_api.php?username=${u}&password=${p}&action=${t.action}`);
-                if(data) {
+                if(data && Array.isArray(data)) {
                     globalDatabase[t.key] = data;
                     data.forEach(item => { const catId = item.category_id || "0"; categoryCounts[t.key][catId] = (categoryCounts[t.key][catId] || 0) + 1; });
                     document.getElementById(`count-${t.key}`).innerHTML = `<span class="cat-count">${data.length}</span>`;
